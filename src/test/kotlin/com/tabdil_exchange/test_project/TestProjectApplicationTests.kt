@@ -1,8 +1,9 @@
 package com.tabdil_exchange.test_project
 
-import com.tabdil_exchange.test_project.model.Account
-import com.tabdil_exchange.test_project.repository.AccountRepository
-import com.tabdil_exchange.test_project.service.AccountService
+import com.tabdil_exchange.test_project.features.account.model.Account
+import com.tabdil_exchange.test_project.features.account.model.dto.AccountRequest
+import com.tabdil_exchange.test_project.features.account.repository.AccountRepository
+import com.tabdil_exchange.test_project.features.account.service.AccountService
 import junit.framework.TestCase.assertEquals
 import junit.framework.TestCase.assertNotNull
 import org.junit.jupiter.api.Assertions
@@ -48,7 +49,10 @@ class TestProjectApplicationTests {
 	}
 	@Test
 	fun `should create account with valid balance`() {
-		val account = accountService.createAccount(3000)
+		val account = accountService.createAccount(AccountRequest(
+				balance = 3000.0,
+				account_id = "123"
+		))
 		Assertions.assertNotNull(account.accountId)
 		Assertions.assertEquals(3000, account.balance)
 	}
@@ -56,14 +60,20 @@ class TestProjectApplicationTests {
 	@Test
 	fun `should throw exception when balance is negative`() {
 		val exception = assertThrows<IllegalArgumentException> {
-			accountService.createAccount(-100)
+			accountService.createAccount(AccountRequest(
+					balance = -3000.0,
+					account_id = "1234"
+			))
 		}
 		Assertions.assertEquals("Balance cannot be negative", exception.message)
 	}
 
 	@Test
 	fun `db should enforce constraint when bypassing service validation`() {
-		val account = Account(balance = -1)
+		val account = Account(
+				balance = -3000.0,
+				accountId = 12345
+		)
 		assertThrows<Exception> {
 			accountRepository.saveAndFlush(account)
 		}
