@@ -12,6 +12,11 @@ services:
       - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
+    logging:
+        driver: "json-file"
+        options:
+          max-size: "10m"
+          max-file: "3"
 
   app:
     build: .
@@ -24,6 +29,10 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/banking
       SPRING_DATASOURCE_USERNAME: soroush
       SPRING_DATASOURCE_PASSWORD: Soroush1381
-
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 volumes:
   postgres-data:

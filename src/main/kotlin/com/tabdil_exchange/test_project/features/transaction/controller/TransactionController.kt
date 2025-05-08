@@ -20,30 +20,36 @@ class TransactionController(
 ) {
     @PostMapping("/deposit")
     suspend fun deposit(@RequestBody request: TransactionRequest): ResponseEntity<Any> {
+        transactionLogger.logOperation(
+                operation = "DEPOSIT_REQUEST",
+                status = "START",
+                parameters = mapOf(
+                        "transactionId" to request.transaction_id,
+                        "accountId" to request.account_id,
+                        "amount" to request.amount
+                )
+        )
         return try {
-            var response: TransactionDepositResponse
-            val durationMs = measureTimeMillis {
-                response = transactionService.handlingDeposit(request)
-            }
-            transactionLogger.logDepositSuccess(
-                    request.transaction_id,
-                    request.account_id,
-                    request.amount,
-                    response.new_balance,
-                    durationMs
+            val response = transactionService.handlingDeposit(request)
+            transactionLogger.logOperation(
+                    operation = "DEPOSIT_REQUEST",
+                    status = "SUCCESS",
+                    parameters = mapOf(
+                            "transactionId" to request.transaction_id,
+                            "accountId" to request.account_id,
+                            "newBalance" to response.new_balance
+                    ),
+                    durationMs = -1
             )
-
             ResponseEntity.ok(response)
         } catch (e: NumberFormatException) {
-            // Log error
             transactionLogger.logDepositError(
-                    request.transaction_id,
-                    request.account_id,
-                    request.amount,
-                    "InvalidAmountFormat",
-                    "The provided amount '${request.amount}' is not a valid number."
+                    transactionId = request.transaction_id,
+                    accountId = request.account_id,
+                    amount = request.amount,
+                    errorType = "InvalidAmountFormat",
+                    errorMessage = "The provided amount '${request.amount}' is not a valid number."
             )
-
             ResponseEntity.badRequest().body(
                     ErrorResponse(
                             error = "InvalidAmountFormat",
@@ -51,15 +57,13 @@ class TransactionController(
                     )
             )
         } catch (e: IllegalArgumentException) {
-            // Log error
             transactionLogger.logDepositError(
-                    request.transaction_id,
-                    request.account_id,
-                    request.amount,
-                    "InvalidTransaction",
-                    e.message ?: "Invalid deposit operation."
+                    transactionId = request.transaction_id,
+                    accountId = request.account_id,
+                    amount = request.amount,
+                    errorType = "InvalidTransaction",
+                    errorMessage = e.message ?: "Invalid deposit operation."
             )
-
             ResponseEntity.badRequest().body(
                     ErrorResponse(
                             error = "InvalidTransaction",
@@ -67,15 +71,13 @@ class TransactionController(
                     )
             )
         } catch (e: NoSuchElementException) {
-            // Log error
             transactionLogger.logDepositError(
-                    request.transaction_id,
-                    request.account_id,
-                    request.amount,
-                    "ResourceNotFound",
-                    e.message ?: "Requested resource could not be found."
+                    transactionId = request.transaction_id,
+                    accountId = request.account_id,
+                    amount = request.amount,
+                    errorType = "ResourceNotFound",
+                    errorMessage = e.message ?: "Requested resource could not be found."
             )
-
             ResponseEntity.status(404).body(
                     ErrorResponse(
                             error = "ResourceNotFound",
@@ -83,15 +85,13 @@ class TransactionController(
                     )
             )
         } catch (e: Exception) {
-            // Log error
             transactionLogger.logDepositError(
-                    request.transaction_id,
-                    request.account_id,
-                    request.amount,
-                    "ServerError",
-                    "An unexpected error occurred: ${e.message}"
+                    transactionId = request.transaction_id,
+                    accountId = request.account_id,
+                    amount = request.amount,
+                    errorType = "ServerError",
+                    errorMessage = "An unexpected error occurred: ${e.message}"
             )
-
             ResponseEntity.status(500).body(
                     ErrorResponse(
                             error = "ServerError",
@@ -99,36 +99,50 @@ class TransactionController(
                     )
             )
         }
+
     }
 
     @PostMapping("/withdraw")
-    suspend fun withdraw(@RequestBody request: TransactionRequest): ResponseEntity<Any> {
+    fun withdraw(@RequestBody request: TransactionRequest): ResponseEntity<Any> {
+        transactionLogger.logOperation(
+                operation = "WITHDRAWAL_REQUEST",
+                status = "START",
+                parameters = mapOf(
+                        "transactionId" to request.transaction_id,
+                        "accountId" to request.account_id,
+                        "amount" to request.amount
+                )
+        )
         return try {
-            var response: TransactionWithdrawalResponse
-            val durationMs = measureTimeMillis {
-                response = transactionService.handlingWithdrawal(request)
+            val response = transactionService.handlingWithdrawal(request)
+            if (response.status == "completed") {
+                transactionLogger.logOperation(
+                        operation = "WITHDRAWAL_REQUEST",
+                        status = "SUCCESS",
+                        parameters = mapOf(
+                                "transactionId" to request.transaction_id,
+                                "accountId" to request.account_id,
+                                "currentBalance" to response.current_balance
+                        ),
+                        durationMs = -1
+                )
+            } else if (response.status == "failed" && response.current_balance != "unknown") {
+                transactionLogger.logInsufficientFunds(
+                        transactionId = request.transaction_id,
+                        accountId = request.account_id,
+                        requestedAmount = request.amount,
+                        currentBalance = response.current_balance
+                )
             }
-
-            // Log successful withdrawal
-            transactionLogger.logWithdrawalSuccess(
-                    request.transaction_id,
-                    request.account_id,
-                    request.amount,
-                    response.current_balance,
-                    durationMs
-            )
-
             ResponseEntity.ok(response)
         } catch (e: NumberFormatException) {
-            // Log error
             transactionLogger.logWithdrawalError(
-                    request.transaction_id,
-                    request.account_id,
-                    request.amount,
-                    "InvalidAmountFormat",
-                    "The provided amount '${request.amount}' is not a valid number."
+                    transactionId = request.transaction_id,
+                    accountId = request.account_id,
+                    amount = request.amount,
+                    errorType = "InvalidAmountFormat",
+                    errorMessage = "The provided amount '${request.amount}' is not a valid number."
             )
-
             ResponseEntity.badRequest().body(
                     ErrorResponse(
                             error = "InvalidAmountFormat",
@@ -136,28 +150,13 @@ class TransactionController(
                     )
             )
         } catch (e: IllegalArgumentException) {
-            if (e.message?.contains("insufficient", ignoreCase = true) == true) {
-                val currentBalance = e.message?.let {
-                    val match = Regex("current balance: ([\\d.]+)").find(it)
-                    match?.groupValues?.get(1) ?: "0.00"
-                } ?: "0.00"
-
-                transactionLogger.logInsufficientFunds(
-                        request.transaction_id,
-                        request.account_id,
-                        request.amount,
-                        currentBalance
-                )
-            } else {
-                transactionLogger.logWithdrawalError(
-                        request.transaction_id,
-                        request.account_id,
-                        request.amount,
-                        "InvalidTransaction",
-                        e.message ?: "Invalid withdrawal operation."
-                )
-            }
-
+            transactionLogger.logWithdrawalError(
+                    transactionId = request.transaction_id,
+                    accountId = request.account_id,
+                    amount = request.amount,
+                    errorType = "InvalidTransaction",
+                    errorMessage = e.message ?: "Invalid withdrawal operation."
+            )
             ResponseEntity.badRequest().body(
                     ErrorResponse(
                             error = "InvalidTransaction",
@@ -165,15 +164,13 @@ class TransactionController(
                     )
             )
         } catch (e: NoSuchElementException) {
-            // Log error
             transactionLogger.logWithdrawalError(
-                    request.transaction_id,
-                    request.account_id,
-                    request.amount,
-                    "ResourceNotFound",
-                    e.message ?: "Requested resource could not be found."
+                    transactionId = request.transaction_id,
+                    accountId = request.account_id,
+                    amount = request.amount,
+                    errorType = "ResourceNotFound",
+                    errorMessage = e.message ?: "Requested resource could not be found."
             )
-
             ResponseEntity.status(404).body(
                     ErrorResponse(
                             error = "ResourceNotFound",
@@ -182,13 +179,12 @@ class TransactionController(
             )
         } catch (e: Exception) {
             transactionLogger.logWithdrawalError(
-                    request.transaction_id,
-                    request.account_id,
-                    request.amount,
-                    "ServerError",
-                    "An unexpected error occurred: ${e.message}"
+                    transactionId = request.transaction_id,
+                    accountId = request.account_id,
+                    amount = request.amount,
+                    errorType = "ServerError",
+                    errorMessage = "An unexpected error occurred: ${e.message}"
             )
-
             ResponseEntity.status(500).body(
                     ErrorResponse(
                             error = "ServerError",

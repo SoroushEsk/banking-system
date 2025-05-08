@@ -71,8 +71,8 @@ class ApplicationConcurrencyTests {
         transactionRepository.deleteAll()
         accountRepository.deleteAll()
 
-        val numThreads = 2
-        val initialBalance = 100.0
+        val numThreads = 1000
+        val initialBalance = 1000.0
         val withdrawalAmount = initialBalance/numThreads
         val expectedBalanceAtTheEnd = initialBalance - (numThreads * withdrawalAmount)
         val accountId = 999999L
@@ -81,7 +81,7 @@ class ApplicationConcurrencyTests {
 
         val executor = Executors.newFixedThreadPool(numThreads)
         val totalCount = AtomicInteger(numThreads)
-        val successCount = AtomicInteger(numThreads)
+        val successCount = AtomicInteger(0)
 
 
         val transactionIdStarter = 200000000L
@@ -99,11 +99,9 @@ class ApplicationConcurrencyTests {
                                     .contentType(MediaType.APPLICATION_JSON)
                                     .content(transactionRequestJson)
                     ).andReturn()
-                    log.info("===========================================================================")
-                    log.info(requestResult.response.contentAsString)
-                    log.info("===========================================================================")
-//                    val transactionResponse = objectMapper.readValue(transactionResponseJson, TransactionWithdrawalResponse::class.java)
-//                    val transactionResponseJson = requestResult.response.contentAsString
+                    val transactionResponseJson = requestResult.response.contentAsString
+                    val transactionResponse = objectMapper.readValue(transactionResponseJson, TransactionWithdrawalResponse::class.java)
+                    if (transactionResponse.status == "completed") successCount.incrementAndGet()
 
 
                 } catch (e: Exception) {
