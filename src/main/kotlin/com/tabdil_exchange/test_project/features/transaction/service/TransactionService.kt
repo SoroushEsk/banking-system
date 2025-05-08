@@ -5,11 +5,18 @@ import com.tabdil_exchange.test_project.features.account.repository.AccountRepos
 import com.tabdil_exchange.test_project.features.transaction.model.Transaction
 import com.tabdil_exchange.test_project.features.transaction.model.TransactionStatus
 import com.tabdil_exchange.test_project.features.transaction.model.TransactionType
-import com.tabdil_exchange.test_project.features.transaction.model.dto.TransactionRequest
 import com.tabdil_exchange.test_project.features.transaction.model.dto.TransactionDepositResponse
+import com.tabdil_exchange.test_project.features.transaction.model.dto.TransactionRequest
 import com.tabdil_exchange.test_project.features.transaction.model.dto.TransactionWithdrawalResponse
 import com.tabdil_exchange.test_project.features.transaction.repository.TransactionRepository
 import jakarta.transaction.Transactional
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import org.slf4j.LoggerFactory
+import org.springframework.dao.OptimisticLockingFailureException
+import org.springframework.dao.PessimisticLockingFailureException
+import org.springframework.scheduling.annotation.Async
 import org.springframework.stereotype.Service
 
 @Service
@@ -17,22 +24,29 @@ class TransactionService(
         private val accountRepository: AccountRepository,
         private val transactionRepository: TransactionRepository
 ) {
-    @Transactional
-    fun handlingDeposit(transactionRequest: TransactionRequest): TransactionDepositResponse{
-        if(transactionRepository.existsById(transactionRequest.transaction_id)){
+    private val logger = LoggerFactory.getLogger(TransactionService::class.java)
+    @Async
+    @Transactional()
+    suspend fun handlingDeposit(transactionRequest: TransactionRequest): TransactionDepositResponse = withContext(Dispatchers.IO) {
+        if (transactionRepository.existsById(transactionRequest.transaction_id)) {
             val existingTransaction = transactionRepository.findById(transactionRequest.transaction_id).orElseThrow {
                 NoSuchElementException("Transaction not found ${transactionRequest.transaction_id}")
             }
-            return createTransactionDepositResponse(existingTransaction)
+            return@withContext createTransactionDepositResponse(existingTransaction)
         }
-        val amount = transactionRequest.amount.toDoubleOrNull() ?: throw NumberFormatException("Wrong number format ${transactionRequest.amount}")
-        val transactionId = transactionRequest.transaction_id.toLongOrNull() ?: throw NumberFormatException("Wrong transaction id format ${transactionRequest.transaction_id}")
-        val accountId = transactionRequest.account_id.toLongOrNull() ?: throw NumberFormatException("Wrong account id format ${transactionRequest.transaction_id}")
+        val amount = transactionRequest.amount.toDoubleOrNull()
+                ?: throw NumberFormatException("Wrong number format ${transactionRequest.amount}")
+        val transactionId = transactionRequest.transaction_id.toLongOrNull()
+                ?: throw NumberFormatException("Wrong transaction id format ${transactionRequest.transaction_id}")
+        val accountId = transactionRequest.account_id.toLongOrNull()
+                ?: throw NumberFormatException("Wrong account id format ${transactionRequest.account_id}")
+
         val account = accountRepository.findById(accountId).orElseGet {
             val newAccount = Account(accountId = accountId, balance = 0.0)
             accountRepository.save(newAccount)
             newAccount
         }
+
         val transaction = Transaction(
                 transactionId = transactionId,
                 accountId = account.accountId,
@@ -41,52 +55,76 @@ class TransactionService(
                 type = TransactionType.DEPOSIT
         )
         transactionRepository.save(transaction)
-        try{
-            val newBalance = account.deposit(transactionRequest.amount.toDouble())
+
+        try {
+            val newBalance = account.deposit(amount)
             accountRepository.save(account)
             transaction.status = TransactionStatus.COMPLETED
             transactionRepository.save(transaction)
-            return TransactionDepositResponse(
+            return@withContext TransactionDepositResponse(
                     transaction_id = transaction.transactionId.toString(),
                     account_id = transaction.accountId.toString(),
                     new_balance = newBalance.toString(),
                     status = "completed"
             )
-        }catch (e: Exception){
+        } catch (e: Exception) {
+            logger.error("Deposit failed: ${e.message}", e)
             transaction.status = TransactionStatus.FAILED
             transaction.failureReason = e.message
             transactionRepository.save(transaction)
+
+            throw e
+        }
+    }
+    @Async
+    @Transactional()
+    fun handlingWithdrawal(transactionRequest: TransactionRequest): TransactionWithdrawalResponse {
+        var lastException: Exception? = null
+
+        try {
+            return processWithdrawal(transactionRequest)
+        } catch (e: OptimisticLockingFailureException) {
+            logger.warn("Optimistic locking failure on attempt ${e.message}")
+            lastException = e
+        } catch (e: PessimisticLockingFailureException) {
+            logger.warn("Pessimistic locking failure on attempt  ${e.message}")
+            lastException = e
+        } catch (e: Exception) {
+            logger.error("Withdrawal failed: ${e.message}", e)
             throw e
         }
 
+
+        throw lastException ?: IllegalStateException("Withdrawal failed after 3 attempts")
     }
-
-
-    @Transactional
-    fun handlingWithdrawal(transactionRequest: TransactionRequest): TransactionWithdrawalResponse {
-        if(transactionRepository.existsById(transactionRequest.transaction_id)){
-            val existingTransaction = transactionRepository.findById(transactionRequest.transaction_id).orElseThrow{
+    private fun processWithdrawal(transactionRequest: TransactionRequest): TransactionWithdrawalResponse {
+        if (transactionRepository.existsById(transactionRequest.transaction_id)) {
+            val existingTransaction = transactionRepository.findById(transactionRequest.transaction_id).orElseThrow {
                 NoSuchElementException("Transaction not found ${transactionRequest.transaction_id}")
             }
             return createTransactionWithdrawalResponse(existingTransaction)
         }
-        val amount = transactionRequest.amount.toDoubleOrNull() ?: throw NumberFormatException("Wrong number format ${transactionRequest.amount}")
-        val transactionId = transactionRequest.transaction_id.toLongOrNull() ?: throw NumberFormatException("Wrong transaction id format ${transactionRequest.transaction_id}")
-        val accountId = transactionRequest.account_id.toLongOrNull() ?: throw NumberFormatException("Wrong account id format ${transactionRequest.transaction_id}")
 
+        val amount = transactionRequest.amount.toDoubleOrNull()
+                ?: throw NumberFormatException("Wrong number format ${transactionRequest.amount}")
+        val transactionId = transactionRequest.transaction_id.toLongOrNull()
+                ?: throw NumberFormatException("Wrong transaction id format ${transactionRequest.transaction_id}")
+        val accountId = transactionRequest.account_id.toLongOrNull()
+                ?: throw NumberFormatException("Wrong account id format ${transactionRequest.account_id}")
 
-        val account = accountRepository.findById(accountId)
-                .orElseThrow{NoSuchElementException("Account not found ${transactionRequest.account_id}")}
+        val account = findAccountWithLock(accountId)
+                ?: throw NoSuchElementException("Account not found ${accountId}")
+
         val transaction = Transaction(
                 transactionId = transactionId,
                 accountId = account.accountId,
                 amount = amount,
                 status = TransactionStatus.PENDING,
-                type = TransactionType.DEPOSIT
+                type = TransactionType.WITHDRAWAL
         )
-
         transactionRepository.save(transaction)
-        try{
+
+        try {
             if (account.balance < amount) {
                 transaction.status = TransactionStatus.FAILED
                 transaction.failureReason = "Insufficient funds"
@@ -100,6 +138,7 @@ class TransactionService(
                         status = "failed"
                 )
             }
+
             val newBalance = account.withdraw(amount)
             accountRepository.save(account)
 
@@ -113,15 +152,26 @@ class TransactionService(
                     requested_amount = amount.toString(),
                     status = "completed"
             )
-        }catch (e: Exception){
+        } catch (e: Exception) {
+            logger.error("Withdrawal processing failed: ${e.message}", e)
+
             transaction.status = TransactionStatus.FAILED
             transaction.failureReason = e.message
             transactionRepository.save(transaction)
+
             throw e
         }
-
     }
-    private fun createTransactionWithdrawalResponse(transaction: Transaction):TransactionWithdrawalResponse{
+
+    private  fun findAccountWithLock(accountId: Long): Account? {
+        return try {
+            accountRepository.findById(accountId).orElse(null)
+        } catch (e: Exception) {
+            logger.warn("Error getting account with lock: ${e.message}")
+            null
+        }
+    }
+    private  fun createTransactionWithdrawalResponse(transaction: Transaction): TransactionWithdrawalResponse  {
         return when (transaction.status) {
             TransactionStatus.COMPLETED -> {
                 val account = accountRepository.findById(transaction.accountId).orElseThrow()
@@ -152,7 +202,7 @@ class TransactionService(
             )
         }
     }
-    private fun createTransactionDepositResponse(transaction: Transaction):TransactionDepositResponse{
+    private  fun createTransactionDepositResponse(transaction: Transaction): TransactionDepositResponse{
         return when (transaction.status) {
             TransactionStatus.COMPLETED -> {
                 val account = accountRepository.findById(transaction.accountId).orElseThrow()
