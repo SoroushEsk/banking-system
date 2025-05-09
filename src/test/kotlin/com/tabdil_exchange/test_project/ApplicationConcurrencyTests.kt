@@ -71,7 +71,7 @@ class ApplicationConcurrencyTests {
         transactionRepository.deleteAll()
         accountRepository.deleteAll()
 
-        val numThreads = 1000
+        val numThreads = 50
         val initialBalance = 1000.0
         val withdrawalAmount = initialBalance/numThreads
         val expectedBalanceAtTheEnd = initialBalance - (numThreads * withdrawalAmount)

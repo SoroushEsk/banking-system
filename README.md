@@ -207,7 +207,7 @@ cd banking-system
 - **Viewing Logs**:
 
   - Local: Logs appear in the console when running `java -jar`.
-  - Docker: Use `docker-compose up` or `docker-compose logs app`.
+  - Docker: Use `docker-compose up` or `docker logs banking-system`.
 
 ## Testing
 
@@ -218,62 +218,6 @@ The project includes two test suites in `src/test/kotlin/com/tabdil_exchange/tes
 - Docker (for Testcontainers).
 - Maven (`mvn test`).
 
-### Test Suites
-
-1. **NegativeBalanceTests.kt**:
-
-   - **Purpose**: Ensures withdrawals don’t result in negative balances.
-
-   - **Tests**:
-
-     - `Single withdrawal exceeding balance fails`: Attempts to withdraw more than the balance, verifying failure and unchanged balance.
-     - `Concurrent withdrawals exceeding balance prevent negative balance`: Simulates 10 concurrent withdrawals exceeding the balance, ensuring the balance stays non-negative.
-
-   - **Run**:
-
-     ```bash
-     mvn test -Dtest=NegativeBalanceTests
-     ```
-
-   - **Expected Output**:
-
-     ```
-     INFO  c.t.t.test_project.NegativeBalanceTests - ====== Concurrent Withdrawal Test Summary ======
-     Initial Balance: 1000.0
-     Withdrawal Amount per Request: 200.0
-     Number of Threads: 10
-     Successful Withdrawals: 5
-     Final Balance: 0.0
-     Expected Balance: 0.0
-     ==============================================
-     ```
-
-2. **ThroughputTests.kt**:
-
-   - **Purpose**: Measures TPS under concurrent load.
-
-   - **Tests**:
-
-     - `Measure TPS under concurrent load`: Runs 20 threads for 10 seconds, mixing deposits and withdrawals, and calculates TPS.
-
-   - **Run**:
-
-     ```bash
-     mvn test -Dtest=ThroughputTests
-     ```
-
-   - **Expected Output**:
-
-     ```
-     INFO  c.t.t.test_project.ThroughputTests - ====== Throughput Test Summary ======
-     Test Duration: 10 seconds
-     Number of Threads: 20
-     Total Requests: 250
-     Successful Transactions: 200
-     TPS: 20.00 transactions/second
-     Final Balance: 10000.0
-     ====================================
-     ```
 
 ### Running All Tests
 
@@ -321,42 +265,6 @@ mvn clean test
   - Verify `pom.xml` has `<artifactId>test_project</artifactId>`.
   - Check `target/` for `test_project-0.0.1-SNAPSHOT.jar` after `mvn package`.
 
-## Performance Optimization
-
-- **Database Indexes**:
-
-  ```sql
-  CREATE INDEX idx_account_id ON accounts(account_id);
-  CREATE INDEX idx_transaction_account_id ON transactions(account_id);
-  ```
-
-- **JVM Tuning**: Adjust `-Xmx` in `Dockerfile` (e.g., `-Xmx1g`) for higher loads.
-
-- **Monitoring**: Add Spring Boot Actuator:
-
-  ```xml
-  <dependency>
-      <groupId>org.springframework.boot</groupId>
-      <artifactId>spring-boot-starter-actuator</artifactId>
-  </dependency>
-  ```
-
-  - Enable metrics in `application.properties`:
-
-    ```properties
-    management.endpoints.web.exposure.include=health,metrics
-    ```
-
-- **Log Aggregation**: Use Filebeat to send logs to Elasticsearch for analysis:
-
-  ```yaml
-  filebeat:
-    image: docker.elastic.co/beats/filebeat:8.8.0
-    volumes:
-      - ./filebeat.yml:/usr/share/filebeat/filebeat.yml
-    depends_on:
-      - app
-  ```
 
 ## Contributing
 
@@ -366,10 +274,6 @@ mvn clean test
 4. Push to the branch: `git push origin feature/your-feature`.
 5. Open a pull request with a detailed description.
 
-## License
 
-\[Add your license here, e.g., MIT, Apache 2.0\]
 
----
-
-Built with ❤️ by \[Your Name/Team\]
+Built with ❤️ by Soroush Eskandarie
