@@ -34,5 +34,10 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+
 volumes:
   postgres-data:

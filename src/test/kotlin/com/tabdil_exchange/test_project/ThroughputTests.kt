@@ -82,8 +82,8 @@ class ThroughputTests {
         }
 
 
-        val numThreads = 10
-        val requestsPerThread = 5
+        val numThreads = 15
+        val requestsPerThread = 1
         val depositAmount = 100.0
         val withdrawalAmount = 100.0
         val executor = Executors.newFixedThreadPool(numThreads)
@@ -96,7 +96,7 @@ class ThroughputTests {
                     var transactionId = transactionIdStarter + i
                     for (j in 1..requestsPerThread) {
                         try {
-                            val isDeposit = ((transactionId % 2) == 0L)
+                            val isDeposit = (i<= (numThreads/2))
                             val amount = if (isDeposit) depositAmount else withdrawalAmount
                             val endpoint = if (isDeposit) "/api/transactions/deposit" else "/api/transactions/withdraw"
                             val transactionRequest = TransactionRequest(
@@ -124,6 +124,7 @@ class ThroughputTests {
                             }
                             if (status == "completed") {
                                 successCount.incrementAndGet()
+                                break
                             }
                             totalRequests.incrementAndGet()
                             Thread.sleep(10)

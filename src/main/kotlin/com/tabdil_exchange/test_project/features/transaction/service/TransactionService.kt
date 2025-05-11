@@ -26,61 +26,136 @@ class TransactionService(
 ) {
     private val logger = LoggerFactory.getLogger(TransactionService::class.java)
 
-    @Async
     @Transactional
     fun handlingDeposit(transactionRequest: TransactionRequest): TransactionDepositResponse {
+        val maxAttempts = 3
+        var lastException: Exception? = null
+
+        for (attempt in 1..maxAttempts) {
+            try {
+                transactionLogger.logOperation(
+                    operation = "ATTEMPT_DEPOSIT",
+                    status = "START",
+                    parameters = mapOf(
+                        "transactionId" to transactionRequest.transaction_id,
+                        "accountId" to transactionRequest.account_id,
+                        "amount" to transactionRequest.amount,
+                        "attempt" to attempt.toString()
+                    )
+                )
+                return processDeposit(transactionRequest)
+            } catch (e: OptimisticLockingFailureException) {
+                logger.warn("Optimistic locking failure for transaction ${transactionRequest.transaction_id}, attempt $attempt", e)
+                transactionLogger.logWithdrawalError(
+                    transactionId = transactionRequest.transaction_id,
+                    accountId = transactionRequest.account_id,
+                    amount = transactionRequest.amount,
+                    errorType = "OptimisticLockingFailure",
+                    errorMessage = "Locking failure on attempt $attempt: ${e.message}"
+                )
+                lastException = e
+                if (attempt == maxAttempts) {
+                    transactionLogger.logOperation(
+                        operation = "DEPOSIT",
+                        status = "FAILURE",
+                        parameters = mapOf(
+                            "transactionId" to transactionRequest.transaction_id,
+                            "accountId" to transactionRequest.account_id,
+                            "amount" to transactionRequest.amount
+                        ),
+                        reason = "Failed after $maxAttempts attempts: ${e.message}"
+                    )
+                }
+            } catch (e: PessimisticLockingFailureException) {
+                logger.warn("Pessimistic locking failure for transaction ${transactionRequest.transaction_id}, attempt $attempt", e)
+                transactionLogger.logWithdrawalError(
+                    transactionId = transactionRequest.transaction_id,
+                    accountId = transactionRequest.account_id,
+                    amount = transactionRequest.amount,
+                    errorType = "PessimisticLockingFailure",
+                    errorMessage = "Locking failure on attempt $attempt: ${e.message}"
+                )
+                lastException = e
+                if (attempt == maxAttempts) {
+                    transactionLogger.logOperation(
+                        operation = "DEPOSIT",
+                        status = "FAILURE",
+                        parameters = mapOf(
+                            "transactionId" to transactionRequest.transaction_id,
+                            "accountId" to transactionRequest.account_id,
+                            "amount" to transactionRequest.amount
+                        ),
+                        reason = "Failed after $maxAttempts attempts: ${e.message}"
+                    )
+                }
+            } catch (e: Exception) {
+                logger.error("Deposit failed for transaction ${transactionRequest.transaction_id}", e)
+                transactionLogger.logWithdrawalError(
+                    transactionId = transactionRequest.transaction_id,
+                    accountId = transactionRequest.account_id,
+                    amount = transactionRequest.amount,
+                    errorType = e.javaClass.simpleName,
+                    errorMessage = e.message ?: "Unknown error"
+                )
+            }
+            Thread.sleep(200 * attempt.toLong())
+        }
+        throw lastException ?: IllegalStateException("Deposit failed after $maxAttempts attempts")
+    }
+
+    fun processDeposit(transactionRequest: TransactionRequest): TransactionDepositResponse{
         if (transactionRepository.existsById(transactionRequest.transaction_id)) {
             val existingTransaction = transactionRepository.findById(transactionRequest.transaction_id).orElseThrow {
                 NoSuchElementException("Transaction not found ${transactionRequest.transaction_id}")
             }
             transactionLogger.logOperation(
-                    operation = "CHECK_TRANSACTION_EXISTS",
-                    status = "SUCCESS",
-                    parameters = mapOf("transactionId" to transactionRequest.transaction_id)
+                operation = "CHECK_TRANSACTION_EXISTS",
+                status = "SUCCESS",
+                parameters = mapOf("transactionId" to transactionRequest.transaction_id)
             )
             return createTransactionDepositResponse(existingTransaction)
         }
 
         val amount = transactionRequest.amount.toDoubleOrNull()
-                ?: throw NumberFormatException("Invalid amount format ${transactionRequest.amount}")
+            ?: throw NumberFormatException("Invalid amount format ${transactionRequest.amount}")
         val transactionId = transactionRequest.transaction_id.toLongOrNull()
-                ?: throw NumberFormatException("Invalid transaction id format ${transactionRequest.transaction_id}")
+            ?: throw NumberFormatException("Invalid transaction id format ${transactionRequest.transaction_id}")
         val accountId = transactionRequest.account_id.toLongOrNull()
-                ?: throw NumberFormatException("Invalid account id format ${transactionRequest.account_id}")
+            ?: throw NumberFormatException("Invalid account id format ${transactionRequest.account_id}")
 
         transactionLogger.logOperation(
-                operation = "PARSE_DEPOSIT_REQUEST",
-                status = "SUCCESS",
-                parameters = mapOf(
-                        "transactionId" to transactionId.toString(),
-                        "accountId" to accountId.toString(),
-                        "amount" to amount.toString()
-                )
+            operation = "PARSE_DEPOSIT_REQUEST",
+            status = "SUCCESS",
+            parameters = mapOf(
+                "transactionId" to transactionId.toString(),
+                "accountId" to accountId.toString(),
+                "amount" to amount.toString()
+            )
         )
 
         val account = accountRepository.findById(accountId).orElseGet {
             val newAccount = Account(accountId = accountId, balance = 0.0)
             accountRepository.save(newAccount)
             transactionLogger.logOperation(
-                    operation = "CREATE_ACCOUNT",
-                    status = "SUCCESS",
-                    parameters = mapOf("accountId" to accountId.toString())
+                operation = "CREATE_ACCOUNT",
+                status = "SUCCESS",
+                parameters = mapOf("accountId" to accountId.toString())
             )
             newAccount
         }
 
         val transaction = Transaction(
-                transactionId = transactionId,
-                accountId = account.accountId,
-                amount = amount,
-                status = TransactionStatus.PENDING,
-                type = TransactionType.DEPOSIT
+            transactionId = transactionId,
+            accountId = account.accountId,
+            amount = amount,
+            status = TransactionStatus.PENDING,
+            type = TransactionType.DEPOSIT
         )
         transactionRepository.save(transaction)
         transactionLogger.logOperation(
-                operation = "SAVE_TRANSACTION",
-                status = "SUCCESS",
-                parameters = mapOf("transactionId" to transactionId.toString())
+            operation = "SAVE_TRANSACTION",
+            status = "SUCCESS",
+            parameters = mapOf("transactionId" to transactionId.toString())
         )
 
         try {
@@ -89,17 +164,17 @@ class TransactionService(
             transaction.status = TransactionStatus.COMPLETED
             transactionRepository.save(transaction)
             transactionLogger.logDepositSuccess(
-                    transactionId = transactionId.toString(),
-                    accountId = accountId.toString(),
-                    amount = amount.toString(),
-                    newBalance = newBalance.toString(),
-                    durationMs = -1
+                transactionId = transactionId.toString(),
+                accountId = accountId.toString(),
+                amount = amount.toString(),
+                newBalance = newBalance.toString(),
+                durationMs = -1
             )
             return TransactionDepositResponse(
-                    transaction_id = transaction.transactionId.toString(),
-                    account_id = transaction.accountId.toString(),
-                    new_balance = newBalance.toString(),
-                    status = "completed"
+                transaction_id = transaction.transactionId.toString(),
+                account_id = transaction.accountId.toString(),
+                new_balance = newBalance.toString(),
+                status = "completed"
             )
         } catch (e: Exception) {
             logger.error("Deposit failed for transaction ${transactionRequest.transaction_id}", e)
@@ -112,17 +187,15 @@ class TransactionService(
                 transactionRepository.save(transaction)
             }
             transactionLogger.logDepositError(
-                    transactionId = transactionId.toString(),
-                    accountId = accountId.toString(),
-                    amount = transactionRequest.amount,
-                    errorType = e.javaClass.simpleName,
-                    errorMessage = e.message ?: "Unknown error"
+                transactionId = transactionId.toString(),
+                accountId = accountId.toString(),
+                amount = transactionRequest.amount,
+                errorType = e.javaClass.simpleName,
+                errorMessage = e.message ?: "Unknown error"
             )
             throw e
         }
     }
-
-    @Async
     @Transactional
     fun handlingWithdrawal(transactionRequest: TransactionRequest): TransactionWithdrawalResponse {
         val maxAttempts = 3
@@ -194,7 +267,6 @@ class TransactionService(
                         errorType = e.javaClass.simpleName,
                         errorMessage = e.message ?: "Unknown error"
                 )
-                throw e
             }
             Thread.sleep(200 * attempt.toLong())
         }
